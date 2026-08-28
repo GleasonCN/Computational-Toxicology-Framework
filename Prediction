@@ -1,0 +1,191 @@
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.svm import SVC
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import roc_auc_score
+import joblib
+
+if __name__ == '__main__':
+    # ================== Model Training ==================
+    print("Loading training data...")
+
+    # Load training data containing precomputed Morgan fingerprint features
+    train_data = pd.read_excel('Morgan_Fingerprint_Dataset.xlsx')
+    print("Training data loaded successfully")
+    print(f"Training data shape: {train_data.shape}")
+
+    # Extract features and labels
+    # The first column contains compound IDs/names and is excluded.
+    # Columns 2 through the penultimate column contain the 1024-bit
+    # Morgan fingerprint features, and the last column contains the label.
+    fp_columns = train_data.columns[1:-1]
+    features = train_data[fp_columns]
+    labels = train_data.iloc[:, -1]
+
+    # Verify that the number of fingerprint features is 1024
+    if len(fp_columns) != 1024:
+        print(
+            f"Warning: The number of features is {len(fp_columns)}, "
+            f"instead of the expected 1024."
+        )
+
+    # Standardize features
+    scaler = StandardScaler()
+    features_scaled = scaler.fit_transform(features)
+
+    # Split the dataset into training and test sets
+    X_train, X_test, y_train, y_test = train_test_split(
+        features_scaled,
+        labels,
+        test_size=0.2,
+        random_state=42
+    )
+
+    print(
+        f"Training set size: {X_train.shape}, "
+        f"test set size: {X_test.shape}"
+    )
+
+    # Define machine learning models and hyperparameter search spaces
+    model_params = {
+        'RF': {
+            'model': RandomForestClassifier(random_state=42),
+            'params': {
+                'n_estimators': [50, 100, 200]
+            }
+        },
+        'GBoost': {
+            'model': GradientBoostingClassifier(random_state=42),
+            'params': {
+                'n_estimators': [50, 100, 200],
+                'learning_rate': [0.01, 0.1, 0.5]
+            }
+        },
+        'LR': {
+            'model': LogisticRegression(
+                max_iter=1000,
+                random_state=42
+            ),
+            'params': {
+                'C': [0.1, 1, 10]
+            }
+        },
+        'SVM': {
+            'model': SVC(
+                probability=True,
+                random_state=42
+            ),
+            'params': {
+                'C': [0.1, 1, 10],
+                'kernel': ['linear', 'rbf']
+            }
+        }
+    }
+
+    # Store the trained models
+    trained_models = {}
+
+    # Train each machine learning model
+    for model_name, mp in model_params.items():
+        print(f"\n=== Training model: {model_name} ===")
+
+        grid_search = GridSearchCV(
+            mp['model'],
+            mp['params'],
+            cv=5,
+            n_jobs=-1,
+            scoring='accuracy'
+        )
+
+        grid_search.fit(X_train, y_train)
+
+        # Store the best-performing model
+        best_model = grid_search.best_estimator_
+        trained_models[model_name] = best_model
+
+        # Report the optimal hyperparameters
+        print(f"Best parameters: {grid_search.best_params_}")
+
+        # Calculate AUC on the test set
+        y_proba = best_model.predict_proba(X_test)[:, 1]
+        auc = roc_auc_score(y_test, y_proba)
+
+        print(f"Test set AUC: {auc:.4f}")
+
+    print("\nModel training completed successfully.")
+
+    # ================== Compound Prediction ==================
+    print("\nLoading prediction dataset...")
+
+    # Load the prediction dataset containing precomputed Morgan fingerprints
+    predict_data = pd.read_excel(
+        'Morgan_Fingerprint_Prediction_Dataset.xlsx'
+    )
+
+    print("Prediction dataset loaded successfully")
+    print(f"Prediction data shape: {predict_data.shape}")
+
+    # Extract compound names and Morgan fingerprint features
+    # The first column contains compound names.
+    # Columns 2 through the final column contain the 1024-bit
+    # Morgan fingerprint features.
+    compounds = predict_data.iloc[:, 0]
+    predict_fp_columns = predict_data.columns[1:]
+    fingerprints = predict_data[predict_fp_columns]
+
+    # Verify that the number of fingerprint features matches the training data
+    if len(predict_fp_columns) != 1024:
+        print(
+            f"Error: The prediction dataset contains "
+            f"{len(predict_fp_columns)} features, whereas the training "
+            f"dataset contains {len(fp_columns)} features."
+        )
+        exit()
+
+    # Standardize prediction features using the scaler fitted
+    # on the training dataset
+    fingerprints_scaled = scaler.transform(fingerprints)
+
+    # Initialize the prediction results
+    results = []
+
+    # Generate prediction probabilities using each trained model
+    print("\nStarting prediction...")
+
+    for model_name, model in trained_models.items():
+        print(f"Generating predictions using {model_name}...")
+
+        # Obtain the predicted probability for the positive class
+        probabilities = model.predict_proba(
+            fingerprints_scaled
+        )[:, 1]
+
+        results.append(probabilities)
+
+    # Store prediction probabilities in a DataFrame
+    results_df = pd.DataFrame({
+        "Compound": compounds,
+        "RF": results[0],
+        "GBoost": results[1],
+        "LR": results[2],
+        "SVM": results[3],
+    })
+
+    # Calculate the mean prediction probability across all four models
+    results_df['Average'] = results_df[
+        ['RF', 'GBoost', 'LR', 'SVM']
+    ].mean(axis=1)
+
+    # Export prediction results to an Excel file
+    results_df.to_excel(
+        "Prediction_Probabilities.xlsx",
+        index=False
+    )
+
+    print(
+        "\nPrediction results have been saved to "
+        "'Prediction_Probabilities.xlsx'."
+    )
