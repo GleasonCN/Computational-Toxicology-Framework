@@ -1,0 +1,96 @@
+from rdkit import Chem
+from rdkit.Chem import AllChem
+import pandas as pd
+from tqdm import tqdm
+
+
+def smiles_to_fingerprints(input_excel, output_excel):
+    # Load the input Excel file
+    df = pd.read_excel(input_excel)
+
+    # Check whether all required columns are present
+    required_columns = ["Compound", "SMILES", "Label"]
+    missing_columns = [
+        col for col in required_columns if col not in df.columns
+    ]
+
+    if missing_columns:
+        raise ValueError(
+            f"The input Excel file must contain the following columns: "
+            f"{required_columns}. Missing columns: {missing_columns}"
+        )
+
+    # Initialize a list for storing the results
+    data = []
+
+    # Process each SMILES string with a progress bar
+    for index, row in tqdm(
+        df.iterrows(),
+        total=len(df),
+        desc="Processing SMILES"
+    ):
+        compound = row["Compound"]
+        smiles = row["SMILES"]
+        label = row["Label"]
+
+        # Convert the SMILES string into an RDKit molecule object
+        mol = Chem.MolFromSmiles(smiles)
+
+        if mol is None:
+            print(
+                f"Warning: SMILES '{smiles}' "
+                f"(Compound: {compound}) could not be parsed "
+                f"and will be skipped."
+            )
+            continue
+
+        # Generate a 1024-bit Morgan fingerprint with radius = 2
+        fp = AllChem.GetMorganFingerprintAsBitVect(
+            mol,
+            radius=2,
+            nBits=1024
+        )
+
+        # Convert the fingerprint into a list of binary bits
+        fp_bits = list(fp)
+
+        # Store data in the following order:
+        # Compound + fingerprint features + Label
+        data.append([compound] + fp_bits + [label])
+
+    # Create the output DataFrame:
+    # Compound + 1024 fingerprint bits + Label
+    columns = (
+        ["Compound"]
+        + [f"Bit_{i}" for i in range(1024)]
+        + ["Label"]
+    )
+
+    result_df = pd.DataFrame(
+        data,
+        columns=columns
+    )
+
+    # Export the Morgan fingerprints to an Excel file
+    result_df.to_excel(
+        output_excel,
+        index=False,
+        engine="openpyxl"
+    )
+
+    print(f"Data successfully saved to: {output_excel}")
+    print(f"Number of valid compounds processed: {len(result_df)}")
+    print(
+        "Output column order: "
+        "Compound -> Bit_0 ~ Bit_1023 -> Label"
+    )
+
+
+# Example usage
+input_excel = "SMILES_Dataset.xlsx"
+output_excel = "Morgan_Fingerprint_Dataset.xlsx"
+
+smiles_to_fingerprints(
+    input_excel,
+    output_excel
+)
